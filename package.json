@@ -1,0 +1,18 @@
+{
+  "name": "archa-dash",
+  "version": "0.1.0",
+  "private": true,
+  "description": "ARCHA — dash de aprovação de pedidos (inbox → Bling)",
+  "type": "module",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --env-file=.env.local server.js",
+    "seed": "node --env-file=.env.local scripts/seed.js"
+  },
+  "engines": { "node": ">=20" },
+  "dependencies": {
+    "express": "^4.21.2",
+    "pg": "^8.13.1"
+  }
+}
