@@ -3,7 +3,7 @@ import { timingSafeEqual } from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { pool, q, logEvent } from './lib/db.js';
-import { criarPedido, blingGet } from './lib/bling.js';
+import { criarPedido, blingGet, blingPost } from './lib/bling.js';
 
 const app = express();
 app.use(express.json({ limit: '1mb' }));
@@ -159,6 +159,45 @@ app.post('/api/orders/:id/send', async (req, res, next) => {
       });
       res.status(502).json({ error: err.message, order: await getOrder(order.id) });
     }
+  } catch (e) { next(e); }
+});
+
+// Gera a NF-e em rascunho a partir do pedido de venda (validado 05/09: POST gerar-nfe = 201)
+app.post('/api/orders/:id/gerar-nf', async (req, res, next) => {
+  try {
+    const order = await getOrder(req.params.id);
+    if (!order) return res.status(404).json({ error: 'não existe' });
+    if (order.status !== 'enviado' || !order.bling_pedido_id) return res.status(409).json({ error: 'precisa estar enviado ao Bling' });
+    if (order.nf_id) return res.status(409).json({ error: `já tem NF (${order.nf_numero || order.nf_id})` });
+    const { status, body } = await blingPost(`/pedidos/vendas/${order.bling_pedido_id}/gerar-nfe`);
+    const nfId = body?.data?.idNotaFiscal;
+    if (status >= 300 || !nfId) return res.status(502).json({ error: `Bling respondeu ${status}`, resposta: body });
+    const det = await blingGet(`/nfe/${nfId}`);
+    const n = det.body?.data || {};
+    await pool.query(
+      `UPDATE archa.orders SET nf_id=$2, nf_numero=$3, nf_situacao=$4, nf_emissao=$5, nf_link=$6, updated_at=now() WHERE id=$1`,
+      [order.id, nfId, n.numero || null, n.situacao ?? null, n.dataEmissao || null, n.linkDanfe || n.linkPDF || null]);
+    await logEvent(order.id, 'gabriel', 'nf_gerada', { nf_id: nfId, numero: n.numero, situacao: n.situacao });
+    res.json(await getOrder(order.id));
+  } catch (e) { next(e); }
+});
+
+// Autoriza a NF na SEFAZ (ato fiscal — sempre clique humano, nunca automático)
+app.post('/api/orders/:id/autorizar-nf', async (req, res, next) => {
+  try {
+    const order = await getOrder(req.params.id);
+    if (!order) return res.status(404).json({ error: 'não existe' });
+    if (!order.nf_id) return res.status(409).json({ error: 'sem NF gerada' });
+    if (order.nf_situacao === 6) return res.status(409).json({ error: 'NF já autorizada' });
+    const { status, body } = await blingPost(`/nfe/${order.nf_id}/enviar`);
+    if (status >= 300) return res.status(502).json({ error: `Bling respondeu ${status}`, resposta: body });
+    const det = await blingGet(`/nfe/${order.nf_id}`);
+    const n = det.body?.data || {};
+    await pool.query(
+      `UPDATE archa.orders SET nf_situacao=$2, nf_link=COALESCE($3, nf_link), nf_emissao=COALESCE($4, nf_emissao), updated_at=now() WHERE id=$1`,
+      [order.id, n.situacao ?? null, n.linkDanfe || n.linkPDF || null, n.dataEmissao || null]);
+    await logEvent(order.id, 'gabriel', 'nf_autorizada', { nf_id: order.nf_id, situacao: n.situacao, resposta: body?.data ?? null });
+    res.json(await getOrder(order.id));
   } catch (e) { next(e); }
 });
 

@@ -207,7 +207,7 @@ function render(){
   </div>
   ${exc.length?`<div class="sec"><h3>Exceções</h3>${exc.map(e=>`<div class="exc"><b>${esc(e.regra||'')}</b> — ${esc(e.detalhe||JSON.stringify(e))}</div>`).join('')}</div>`:''}
   ${o.nf_id||o.pago_em?`<div class="sec"><h3>Faturamento</h3><div class="nf-info">
-    ${o.nf_numero?`NF <b>${esc(o.nf_numero)}</b> ${o.nf_situacao===6?'autorizada':'situação '+esc(o.nf_situacao)} ${o.nf_emissao?'· emitida '+dt(o.nf_emissao):''}<br>`:''}
+    ${o.nf_numero?`NF <b>${esc(o.nf_numero)}</b> ${({1:'pendente (rascunho)',2:'cancelada',3:'aguardando recibo',4:'rejeitada',5:'autorizada',6:'autorizada',7:'emitida DANFE',8:'registrada',10:'denegada'})[o.nf_situacao]||'situação '+esc(o.nf_situacao)} ${o.nf_emissao?'· emitida '+dt(o.nf_emissao):''}<br>`:''}
     ${o.boleto_vencimento?`Boleto venc. ${dshort(o.boleto_vencimento)} ${o.boleto_link?'':'<span class="conf">(emitido fora do Bling)</span>'} `:''}
     ${o.pago_em?`<b style="color:var(--paid)">· PAGO em ${dt(o.pago_em)}</b>`:o.nf_id?'· aguardando pagamento':''}
     ${o.despachado_em?`Transporte confirmado ${dt(o.despachado_em)} ${o.rastreio?'· rastreio <b>'+esc(o.rastreio)+'</b>':''}<br>`:''}
@@ -248,6 +248,8 @@ function render(){
     ${o.status==='aguardando_cliente'?`<button class="act b-approve" onclick="clientConfirmed()">✅ Cliente confirmou</button>
     <button class="act b-save" onclick="frameEmail()">✉️ Reenviar e-mail</button>`:''}
     ${['aprovado','erro'].includes(o.status)?`<button class="act b-send" onclick="send()">Enviar ➜ Bling</button>`:''}
+    ${o.status==='enviado'&&!o.nf_id?`<button class="act b-send" onclick="gerarNF()">🧾 Gerar NF</button>`:''}
+    ${o.nf_id&&o.nf_situacao!==6?`<button class="act b-send" onclick="autorizarNF()">📤 Autorizar NF (SEFAZ)</button>`:''}
     ${o.status!=='enviado'&&o.status!=='descartado'?`<button class="act b-discard" onclick="discard()">Descartar</button>`:''}
   </div>`;
 }
@@ -287,6 +289,12 @@ window.clientConfirmed=async()=>{try{
   current=await api(`/api/orders/${current.id}/client-confirmed`,{method:'POST'});
   toast('Confirmado pelo cliente — pronto pra aprovar');render();load();
 }catch(e){toast(e.message,true)}};
+
+window.gerarNF=async()=>{try{current=await api(`/api/orders/${current.id}/gerar-nf`,{method:'POST'});
+  toast(`NF ${current.nf_numero||''} gerada (rascunho)`);render();load();}catch(e){toast(e.message,true)}};
+window.autorizarNF=async()=>{try{current=await api(`/api/orders/${current.id}/autorizar-nf`,{method:'POST'});
+  toast(current.nf_situacao===6?'NF autorizada na SEFAZ':'NF transmitida — situação '+current.nf_situacao);render();load();}
+  catch(e){toast(e.message,true)}};
 
 window.despacho=async()=>{const r=prompt('Código de rastreio (opcional):')||null;
   try{current=await api(`/api/orders/${current.id}/despacho`,{method:'POST',body:JSON.stringify({rastreio:r})});
