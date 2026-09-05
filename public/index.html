@@ -55,10 +55,12 @@
   .card .meta{display:flex;justify-content:space-between;color:var(--tx2);font-size:12px}
   .card .foot{display:flex;gap:6px;margin-top:6px;align-items:center;font-size:12px;color:var(--tx2)}
   .col-entrada h3{border-top:3px solid var(--acc);border-radius:12px 12px 0 0}
-  .col-aprovado h3{border-top:3px solid var(--ok);border-radius:12px 12px 0 0}
-  .col-bling h3{border-top:3px solid var(--sent);border-radius:12px 12px 0 0}
-  .col-nf h3{border-top:3px solid var(--warn);border-radius:12px 12px 0 0}
+  .col-confirmacao h3{border-top:3px solid var(--warn);border-radius:12px 12px 0 0}
+  .col-erp h3{border-top:3px solid var(--ok);border-radius:12px 12px 0 0}
+  .col-nf h3{border-top:3px solid var(--sent);border-radius:12px 12px 0 0}
+  .col-transporte h3{border-top:3px solid #fb923c;border-radius:12px 12px 0 0}
   .col-pago h3{border-top:3px solid var(--paid);border-radius:12px 12px 0 0}
+  .col{min-width:200px}
   #detail{overflow-y:auto;padding:18px 20px}
   #detail .empty{color:var(--tx2);margin-top:40vh;text-align:center}
   .sec{margin-bottom:18px}
@@ -116,7 +118,7 @@
 const ST_LABEL={extraido:'extraído',pronto:'pronto',excecao:'exceção',aprovado:'aprovado',enviado:'enviado',erro:'erro',descartado:'descartado'};
 const ORDER_ST=['pronto','excecao','extraido','aprovado','erro','enviado'];
 const PEND_ST=['extraido','pronto','excecao','erro'];  // exige ação humana
-const STAGES=[['entrada','Entrada'],['aprovado','Aprovado'],['bling','Pedido no Bling'],['nf','NF gerada'],['pago','Pago']];
+const STAGES=[['entrada','Entrada'],['confirmacao','Aguardando confirmação'],['erp','Aprovado → ERP'],['nf','NF gerada'],['transporte','Transporte confirmado'],['pago','Pagamento realizado']];
 let view='pend', filter=null, current=null, orders=[];
 
 const $=s=>document.querySelector(s);
@@ -177,6 +179,7 @@ async function loadKanban(){
         <div class="foot">
           <span class="st st-${o.status}">${ST_LABEL[o.status]}</span>
           ${o.nf_numero?`<span>NF ${esc(o.nf_numero)}</span>`:''}
+          ${o.rastreio?`<span>🚚 ${esc(o.rastreio)}</span>`:''}
           ${o.boleto_vencimento&&!o.pago_em?`<span>venc. ${dshort(o.boleto_vencimento)}</span>`:''}
           ${o.pago_em?`<span style="color:var(--paid)">pago ${dshort(o.pago_em)}</span>`:''}
           <span style="margin-left:auto">${dshort(o.created_at)}</span>
@@ -206,10 +209,12 @@ function render(){
     ${o.nf_numero?`NF <b>${esc(o.nf_numero)}</b> ${o.nf_situacao===6?'autorizada':'situação '+esc(o.nf_situacao)} ${o.nf_emissao?'· emitida '+dt(o.nf_emissao):''}<br>`:''}
     ${o.boleto_vencimento?`Boleto venc. ${dshort(o.boleto_vencimento)} ${o.boleto_link?'':'<span class="conf">(emitido fora do Bling)</span>'} `:''}
     ${o.pago_em?`<b style="color:var(--paid)">· PAGO em ${dt(o.pago_em)}</b>`:o.nf_id?'· aguardando pagamento':''}
-    <div style="display:flex;gap:8px;margin-top:8px">
+    ${o.despachado_em?`Transporte confirmado ${dt(o.despachado_em)} ${o.rastreio?'· rastreio <b>'+esc(o.rastreio)+'</b>':''}<br>`:''}
+    <div style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap">
       ${o.nf_link?`<a class="chip" style="text-decoration:none" href="${esc(o.nf_link)}" target="_blank">📄 Ver NF (DANFE)</a>`:''}
       ${o.boleto_link?`<a class="chip" style="text-decoration:none" href="${esc(o.boleto_link)}" target="_blank">💰 Ver boleto</a>`:''}
       ${o.nf_link?`<button class="chip" onclick="emailNF()">✉️ Enviar por e-mail</button>`:''}
+      ${o.status==='enviado'&&!o.despachado_em?`<button class="chip" onclick="despacho()">🚚 Confirmar transporte</button>`:''}
     </div>
   </div></div>`:''}
   <div class="sec"><h3>Cliente</h3><div class="grid2">
@@ -245,6 +250,10 @@ function render(){
 
 window.closeDetail=()=>{current=null;$('#detail').innerHTML='<div class="empty">Selecione um pedido</div>';
   $('#main').classList.remove('open');};
+
+window.despacho=async()=>{const r=prompt('Código de rastreio (opcional):')||null;
+  try{current=await api(`/api/orders/${current.id}/despacho`,{method:'POST',body:JSON.stringify({rastreio:r})});
+  toast('Transporte confirmado');render();load();}catch(e){toast(e.message,true)}};
 
 // Monta o e-mail de cobrança/NF pro cliente (abre no Gmail; envio automático é a fase "frame" V2)
 window.emailNF=()=>{

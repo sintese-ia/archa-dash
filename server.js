@@ -162,6 +162,19 @@ app.post('/api/orders/:id/send', async (req, res, next) => {
   } catch (e) { next(e); }
 });
 
+// Transporte confirmado (manual — fallback quando a etiqueta é gerada fora do Bling)
+app.post('/api/orders/:id/despacho', async (req, res, next) => {
+  try {
+    const order = await getOrder(req.params.id);
+    if (!order) return res.status(404).json({ error: 'não existe' });
+    if (order.status !== 'enviado') return res.status(409).json({ error: 'só pedido enviado tem despacho' });
+    await pool.query(`UPDATE archa.orders SET despachado_em = now(), rastreio = COALESCE($2, rastreio), updated_at = now() WHERE id = $1`,
+      [order.id, req.body?.rastreio || null]);
+    await logEvent(order.id, 'gabriel', 'despacho_confirmado', { rastreio: req.body?.rastreio || null });
+    res.json(await getOrder(order.id));
+  } catch (e) { next(e); }
+});
+
 app.post('/api/orders/:id/discard', async (req, res, next) => {
   try {
     const order = await getOrder(req.params.id);
@@ -173,13 +186,14 @@ app.post('/api/orders/:id/discard', async (req, res, next) => {
   } catch (e) { next(e); }
 });
 
-// Kanban: coluna derivada de status + campos preenchidos pelo poller.
-// entrada → aprovado (inclui erro, que precisa de re-envio) → bling → nf → pago
+// Kanban: coluna derivada de status + campos preenchidos pelo poller (fluxo definido pelo Gabriel 05/09):
+// entrada → confirmacao → erp → nf → transporte → pago
 function stageOf(o) {
   if (o.pago_em) return 'pago';
+  if (o.despachado_em) return 'transporte';
   if (o.nf_id) return 'nf';
-  if (o.status === 'enviado') return 'bling';
-  if (o.status === 'aprovado' || o.status === 'erro') return 'aprovado';
+  if (['aprovado', 'enviado', 'erro'].includes(o.status)) return 'erp';
+  if (['pronto', 'excecao'].includes(o.status)) return 'confirmacao';
   return 'entrada';
 }
 app.get('/api/kanban', async (_req, res, next) => {
@@ -196,7 +210,7 @@ app.get('/api/kanban', async (_req, res, next) => {
 // aqui cobrimos o fluxo ARCHA: pedido criado via API → NF vinculada → conta a receber.
 async function pollBling() {
   const abertos = await q(
-    `SELECT id, bling_pedido_id, bling_contato_id, nf_id, nf_situacao, pago_em, total_estimado
+    `SELECT id, bling_pedido_id, bling_contato_id, nf_id, nf_situacao, pago_em, despachado_em, total_estimado
      FROM archa.orders WHERE status = 'enviado' AND pago_em IS NULL AND bling_pedido_id IS NOT NULL LIMIT 50`);
   for (const o of abertos) {
     try {
@@ -211,12 +225,19 @@ async function pollBling() {
             [o.id, nf.id, n.numero || null, n.situacao ?? null, n.dataEmissao || null, n.linkDanfe || n.linkPDF || null]);
           await logEvent(o.id, 'poller', 'nf_detectada', { nf_id: nf.id, numero: n.numero, situacao: n.situacao });
         }
-      } else if (o.nf_situacao !== 6) {
+      } else {
         const det = await blingGet(`/nfe/${o.nf_id}`);
-        const sit = det.body?.data?.situacao;
-        if (sit != null && sit !== o.nf_situacao) {
-          await pool.query(`UPDATE archa.orders SET nf_situacao=$2, updated_at=now() WHERE id=$1`, [o.id, sit]);
-          await logEvent(o.id, 'poller', 'nf_situacao', { situacao: sit });
+        const n = det.body?.data || {};
+        if (n.situacao != null && n.situacao !== o.nf_situacao) {
+          await pool.query(`UPDATE archa.orders SET nf_situacao=$2, updated_at=now() WHERE id=$1`, [o.id, n.situacao]);
+          await logEvent(o.id, 'poller', 'nf_situacao', { situacao: n.situacao });
+        }
+        // volumes na NF = etiqueta/postagem gerada → transporte confirmado
+        const vols = n.transporte?.volumes || [];
+        if (!o.despachado_em && vols.length) {
+          await pool.query(`UPDATE archa.orders SET despachado_em=now(), rastreio=$2, updated_at=now() WHERE id=$1 AND despachado_em IS NULL`,
+            [o.id, vols[0]?.codigoRastreamento || null]);
+          await logEvent(o.id, 'poller', 'despacho_detectado', { volumes: vols.length, rastreio: vols[0]?.codigoRastreamento || null });
         }
       }
       if (o.bling_contato_id) {
