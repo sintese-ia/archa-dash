@@ -207,8 +207,8 @@ async function pollBling() {
           const det = await blingGet(`/nfe/${nf.id}`);
           const n = det.body?.data || {};
           await pool.query(
-            `UPDATE archa.orders SET nf_id=$2, nf_numero=$3, nf_situacao=$4, nf_emissao=$5, updated_at=now() WHERE id=$1`,
-            [o.id, nf.id, n.numero || null, n.situacao ?? null, n.dataEmissao || null]);
+            `UPDATE archa.orders SET nf_id=$2, nf_numero=$3, nf_situacao=$4, nf_emissao=$5, nf_link=$6, updated_at=now() WHERE id=$1`,
+            [o.id, nf.id, n.numero || null, n.situacao ?? null, n.dataEmissao || null, n.linkDanfe || n.linkPDF || null]);
           await logEvent(o.id, 'poller', 'nf_detectada', { nf_id: nf.id, numero: n.numero, situacao: n.situacao });
         }
       } else if (o.nf_situacao !== 6) {
@@ -220,7 +220,18 @@ async function pollBling() {
         }
       }
       if (o.bling_contato_id) {
-        // pago = todas as contas a receber do contato com valor compatível estão baixadas (situacao 2/3)
+        // boleto emitido no Bling? (só existe se a cobrança bancária estiver integrada — hoje não está)
+        const ab = await blingGet(`/contas/receber?idContato=${o.bling_contato_id}&situacoes[]=1`);
+        const aberta = (ab.body?.data || []).find((x) => Math.abs(Number(x.valor) - Number(o.total_estimado)) < 0.01);
+        if (aberta) {
+          const det = await blingGet(`/contas/receber/${aberta.id}`);
+          const d = det.body?.data || {};
+          if (d.linkBoleto || aberta.vencimento) {
+            await pool.query(`UPDATE archa.orders SET boleto_link=COALESCE($2, boleto_link), boleto_vencimento=COALESCE($3, boleto_vencimento), updated_at=now() WHERE id=$1`,
+              [o.id, d.linkBoleto || null, aberta.vencimento || null]);
+          }
+        }
+        // pago = conta a receber do contato com valor compatível baixada (situacao 2/3)
         const cr = await blingGet(`/contas/receber?idContato=${o.bling_contato_id}&situacoes[]=2&situacoes[]=3`);
         const baixadas = (cr.body?.data || []).filter((x) => Math.abs(Number(x.valor) - Number(o.total_estimado)) < 0.01);
         if (baixadas.length) {
