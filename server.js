@@ -3,7 +3,7 @@ import { timingSafeEqual } from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { pool, q, logEvent } from './lib/db.js';
-import { criarPedido } from './lib/bling.js';
+import { criarPedido, blingGet } from './lib/bling.js';
 
 const app = express();
 app.use(express.json({ limit: '1mb' }));
@@ -123,6 +123,15 @@ app.post('/api/orders/:id/approve', async (req, res, next) => {
                bling_produto_id = EXCLUDED.bling_produto_id`,
             [cnpj, it.raw_desc, it.sku, it.bling_produto_id]);
         }
+        // preço aprovado vira tabela B2B do cliente (regra 4 valida contra isso primeiro)
+        if (it.sku && it.preco_unit != null) {
+          await pool.query(
+            `INSERT INTO archa.price_table (cliente_chave, sku, preco, origem)
+             VALUES ($1, $2, $3, 'humano')
+             ON CONFLICT (cliente_chave, sku) DO UPDATE SET preco = EXCLUDED.preco,
+               origem = 'humano', updated_at = now()`,
+            [cnpj, it.sku, it.preco_unit]);
+        }
       }
     }
     res.json(await getOrder(order.id));
@@ -163,6 +172,68 @@ app.post('/api/orders/:id/discard', async (req, res, next) => {
     res.json({ ok: true });
   } catch (e) { next(e); }
 });
+
+// Kanban: coluna derivada de status + campos preenchidos pelo poller.
+// entrada → aprovado (inclui erro, que precisa de re-envio) → bling → nf → pago
+function stageOf(o) {
+  if (o.pago_em) return 'pago';
+  if (o.nf_id) return 'nf';
+  if (o.status === 'enviado') return 'bling';
+  if (o.status === 'aprovado' || o.status === 'erro') return 'aprovado';
+  return 'entrada';
+}
+app.get('/api/kanban', async (_req, res, next) => {
+  try {
+    const orders = await q(
+      `SELECT o.*, (SELECT count(*)::int FROM archa.order_items i WHERE i.order_id = o.id) AS n_itens
+       FROM archa.orders o WHERE status <> 'descartado' ORDER BY o.updated_at DESC LIMIT 300`);
+    res.json({ orders: orders.map((o) => ({ ...o, stage: stageOf(o) })) });
+  } catch (e) { next(e); }
+});
+
+// ---- Poller: acompanha o pós-envio lendo o Bling (NF gerada → boleto pago) ----
+// O fluxo manual da Cells emite NF direto (sem pedido de venda) — descoberta 05/09;
+// aqui cobrimos o fluxo ARCHA: pedido criado via API → NF vinculada → conta a receber.
+async function pollBling() {
+  const abertos = await q(
+    `SELECT id, bling_pedido_id, bling_contato_id, nf_id, nf_situacao, pago_em, total_estimado
+     FROM archa.orders WHERE status = 'enviado' AND pago_em IS NULL AND bling_pedido_id IS NOT NULL LIMIT 50`);
+  for (const o of abertos) {
+    try {
+      if (!o.nf_id) {
+        const { status, body } = await blingGet(`/pedidos/vendas/${o.bling_pedido_id}`);
+        const nf = status === 200 ? body?.data?.notaFiscal : null;
+        if (nf?.id) {
+          const det = await blingGet(`/nfe/${nf.id}`);
+          const n = det.body?.data || {};
+          await pool.query(
+            `UPDATE archa.orders SET nf_id=$2, nf_numero=$3, nf_situacao=$4, nf_emissao=$5, updated_at=now() WHERE id=$1`,
+            [o.id, nf.id, n.numero || null, n.situacao ?? null, n.dataEmissao || null]);
+          await logEvent(o.id, 'poller', 'nf_detectada', { nf_id: nf.id, numero: n.numero, situacao: n.situacao });
+        }
+      } else if (o.nf_situacao !== 6) {
+        const det = await blingGet(`/nfe/${o.nf_id}`);
+        const sit = det.body?.data?.situacao;
+        if (sit != null && sit !== o.nf_situacao) {
+          await pool.query(`UPDATE archa.orders SET nf_situacao=$2, updated_at=now() WHERE id=$1`, [o.id, sit]);
+          await logEvent(o.id, 'poller', 'nf_situacao', { situacao: sit });
+        }
+      }
+      if (o.bling_contato_id) {
+        // pago = todas as contas a receber do contato com valor compatível estão baixadas (situacao 2/3)
+        const cr = await blingGet(`/contas/receber?idContato=${o.bling_contato_id}&situacoes[]=2&situacoes[]=3`);
+        const baixadas = (cr.body?.data || []).filter((x) => Math.abs(Number(x.valor) - Number(o.total_estimado)) < 0.01);
+        if (baixadas.length) {
+          await pool.query(`UPDATE archa.orders SET pago_em=now(), boleto_vencimento=$2, updated_at=now() WHERE id=$1 AND pago_em IS NULL`,
+            [o.id, baixadas[0].vencimento || null]);
+          await logEvent(o.id, 'poller', 'pagamento_detectado', { vencimento: baixadas[0].vencimento, valor: baixadas[0].valor });
+        }
+      }
+    } catch (err) { console.error(`poller pedido ${o.id}:`, err.message); }
+  }
+}
+setInterval(() => pollBling().catch((e) => console.error('poller:', e.message)), 10 * 60 * 1000);
+setTimeout(() => pollBling().catch((e) => console.error('poller:', e.message)), 15 * 1000);
 
 app.get('/healthz', async (_req, res) => {
   try { await q('SELECT 1'); res.json({ ok: true }); }

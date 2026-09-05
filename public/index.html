@@ -8,18 +8,25 @@
   :root{
     --bg:#0b0d10; --panel:#14171c; --panel2:#1a1e25; --line:#262b34;
     --tx:#e8eaed; --tx2:#9aa3af; --ok:#34d399; --warn:#fbbf24; --err:#f87171;
-    --acc:#7dd3fc; --sent:#a78bfa;
+    --acc:#7dd3fc; --sent:#a78bfa; --paid:#4ade80;
   }
   *{box-sizing:border-box} body{margin:0;background:var(--bg);color:var(--tx);
     font:14px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif}
-  header{display:flex;align-items:center;gap:16px;padding:14px 20px;border-bottom:1px solid var(--line)}
-  header h1{font-size:16px;margin:0;letter-spacing:.14em}
-  header h1 small{color:var(--tx2);letter-spacing:0;font-weight:400;margin-left:10px}
-  .chips{display:flex;gap:8px;flex-wrap:wrap;margin-left:auto}
+  header{display:flex;align-items:center;gap:20px;padding:0 20px;border-bottom:1px solid var(--line)}
+  header h1{font-size:16px;margin:0;letter-spacing:.14em;padding:16px 0}
+  nav{display:flex;gap:4px;align-self:stretch}
+  nav button{background:none;border:none;border-bottom:2px solid transparent;color:var(--tx2);
+    font:inherit;font-weight:600;padding:0 14px;cursor:pointer}
+  nav button.on{color:var(--tx);border-bottom-color:var(--acc)}
+  nav button .badge{background:var(--warn);color:#3b2f04;border-radius:999px;font-size:11px;
+    padding:1px 7px;margin-left:6px;font-weight:700}
+  .chips{display:flex;gap:8px;flex-wrap:wrap;margin-left:auto;padding:12px 0}
   .chip{border:1px solid var(--line);border-radius:999px;padding:3px 12px;cursor:pointer;color:var(--tx2);background:none;font:inherit}
   .chip.on{color:var(--tx);border-color:var(--acc)}
   main{display:grid;grid-template-columns:minmax(420px,1fr) minmax(420px,560px);gap:0;height:calc(100vh - 55px)}
-  #list{overflow-y:auto;border-right:1px solid var(--line)}
+  main.kb{grid-template-columns:1fr}
+  main.kb.open{grid-template-columns:minmax(0,1fr) minmax(420px,560px)}
+  #left{overflow:auto;border-right:1px solid var(--line)}
   table{width:100%;border-collapse:collapse}
   th{position:sticky;top:0;background:var(--bg);text-align:left;color:var(--tx2);font-weight:500;
      padding:10px 14px;border-bottom:1px solid var(--line);font-size:12px;text-transform:uppercase;letter-spacing:.06em}
@@ -33,6 +40,25 @@
   .st-aprovado{background:rgba(52,211,153,.20);color:var(--ok)}
   .st-enviado{background:rgba(167,139,250,.14);color:var(--sent)}
   .st-erro,.st-descartado{background:rgba(248,113,113,.12);color:var(--err)}
+  /* kanban */
+  #kanban{display:none;padding:16px;gap:12px;align-items:flex-start;min-height:100%}
+  main.kb #kanban{display:flex} main.kb #list{display:none}
+  .col{background:var(--panel);border:1px solid var(--line);border-radius:12px;min-width:230px;flex:1;
+       display:flex;flex-direction:column;max-height:calc(100vh - 90px)}
+  .col h3{font-size:12px;color:var(--tx2);text-transform:uppercase;letter-spacing:.08em;
+       margin:0;padding:12px 14px;border-bottom:1px solid var(--line);display:flex;justify-content:space-between}
+  .col h3 span{color:var(--tx)}
+  .cards{overflow-y:auto;padding:10px;display:flex;flex-direction:column;gap:8px}
+  .card{background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:10px 12px;cursor:pointer}
+  .card:hover{border-color:var(--acc)}
+  .card .cli{font-weight:600;margin-bottom:2px}
+  .card .meta{display:flex;justify-content:space-between;color:var(--tx2);font-size:12px}
+  .card .foot{display:flex;gap:6px;margin-top:6px;align-items:center;font-size:12px;color:var(--tx2)}
+  .col-entrada h3{border-top:3px solid var(--acc);border-radius:12px 12px 0 0}
+  .col-aprovado h3{border-top:3px solid var(--ok);border-radius:12px 12px 0 0}
+  .col-bling h3{border-top:3px solid var(--sent);border-radius:12px 12px 0 0}
+  .col-nf h3{border-top:3px solid var(--warn);border-radius:12px 12px 0 0}
+  .col-pago h3{border-top:3px solid var(--paid);border-radius:12px 12px 0 0}
   #detail{overflow-y:auto;padding:18px 20px}
   #detail .empty{color:var(--tx2);margin-top:40vh;text-align:center}
   .sec{margin-bottom:18px}
@@ -60,32 +86,44 @@
   #toast.err{border-color:var(--err);color:var(--err)}
   .ev{font-size:12px;color:var(--tx2);padding:4px 0;border-bottom:1px dashed var(--line)}
   .conf{color:var(--tx2);font-size:12px}
+  .nf-info{background:rgba(167,139,250,.08);border:1px solid rgba(167,139,250,.3);border-radius:8px;
+       padding:10px 12px;font-size:13px}
   @media (max-width:900px){ main{grid-template-columns:1fr} #detail{display:none}
-    main.open #list{display:none} main.open #detail{display:block} }
+    main.open #left{display:none} main.open #detail{display:block} }
 </style>
 </head>
 <body>
 <header>
-  <h1>ARCHA<small>pedidos → Bling</small></h1>
+  <h1>ARCHA</h1>
+  <nav>
+    <button id="nav-pend" class="on" onclick="setView('pend')">Ações pendentes<span class="badge" id="pend-badge" hidden></span></button>
+    <button id="nav-kb" onclick="setView('kb')">Kanban</button>
+  </nav>
   <div class="chips" id="chips"></div>
 </header>
 <main id="main">
-  <div id="list"><table>
-    <thead><tr><th>#</th><th>Cliente</th><th class="num">Itens</th><th class="num">Total</th><th class="num">Conf.</th><th>Status</th><th>Recebido</th></tr></thead>
-    <tbody id="rows"></tbody>
-  </table></div>
+  <div id="left">
+    <div id="list"><table>
+      <thead><tr><th>#</th><th>Cliente</th><th class="num">Itens</th><th class="num">Total</th><th class="num">Conf.</th><th>Status</th><th>Recebido</th></tr></thead>
+      <tbody id="rows"></tbody>
+    </table></div>
+    <div id="kanban"></div>
+  </div>
   <div id="detail"><div class="empty">Selecione um pedido</div></div>
 </main>
 <div id="toast"></div>
 <script>
 const ST_LABEL={extraido:'extraído',pronto:'pronto',excecao:'exceção',aprovado:'aprovado',enviado:'enviado',erro:'erro',descartado:'descartado'};
 const ORDER_ST=['pronto','excecao','extraido','aprovado','erro','enviado'];
-let filter=null, current=null, orders=[];
+const PEND_ST=['extraido','pronto','excecao','erro'];  // exige ação humana
+const STAGES=[['entrada','Entrada'],['aprovado','Aprovado'],['bling','Pedido no Bling'],['nf','NF gerada'],['pago','Pago']];
+let view='pend', filter=null, current=null, orders=[];
 
 const $=s=>document.querySelector(s);
 const money=v=>v==null?'—':Number(v).toLocaleString('pt-BR',{style:'currency',currency:'BRL'});
 const esc=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const dt=s=>new Date(s).toLocaleString('pt-BR',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'});
+const dshort=s=>new Date(s).toLocaleDateString('pt-BR',{day:'2-digit',month:'2-digit'});
 
 function toast(msg,err){const t=$('#toast');t.textContent=msg;t.className=err?'err':'';t.style.display='block';
   clearTimeout(t._h);t._h=setTimeout(()=>t.style.display='none',4000);}
@@ -97,19 +135,53 @@ async function api(path,opts){
   return b;
 }
 
-async function load(){
+function setView(v){
+  view=v;
+  $('#nav-pend').classList.toggle('on',v==='pend');
+  $('#nav-kb').classList.toggle('on',v==='kb');
+  $('#main').classList.toggle('kb',v==='kb');
+  $('#chips').style.visibility=v==='pend'?'visible':'hidden';
+  load();
+}
+
+async function load(){ view==='kb'?await loadKanban():await loadPend(); }
+
+async function loadPend(){
   const d=await api('/api/orders'+(filter?`?status=${filter}`:''));
-  orders=d.orders;
   const counts=Object.fromEntries(d.counts.map(c=>[c.status,c.n]));
-  $('#chips').innerHTML=['<button class="chip'+(filter?'':' on')+'" data-f="">todos</button>']
+  const nPend=PEND_ST.reduce((s,k)=>s+(counts[k]||0),0);
+  const badge=$('#pend-badge'); badge.hidden=!nPend; badge.textContent=nPend;
+  orders=filter?d.orders:d.orders.filter(o=>PEND_ST.includes(o.status));
+  $('#chips').innerHTML=[`<button class="chip${filter?'':' on'}" data-f="">pendentes ${nPend}</button>`]
     .concat(ORDER_ST.filter(s=>counts[s]).map(s=>
-      `<button class="chip${filter===s?' on':''}" data-f="${s}">${ST_LABEL[s]} ${counts[s]}</button>`)).join('');
+      `<button class="chip${filter===s?' on':''}" data-f="${s}">${ST_LABEL[s]} ${counts[s]}</button>`))
+    .concat([`<button class="chip${filter==='__all'?' on':''}" data-f="__all">todos</button>`]).join('');
+  if(filter==='__all') orders=d.orders;
   $('#rows').innerHTML=orders.map(o=>`<tr data-id="${o.id}" class="${current?.id===o.id?'sel':''}">
     <td>${o.id}</td><td>${esc(o.cliente_nome||'?')}</td><td class="num">${o.n_itens}</td>
     <td class="num">${money(o.total_estimado)}</td>
     <td class="num conf">${o.confidence!=null?Math.round(o.confidence)+'%':'—'}</td>
     <td><span class="st st-${o.status}">${ST_LABEL[o.status]}</span></td><td>${dt(o.created_at)}</td></tr>`).join('')
-    ||'<tr><td colspan="7" style="color:var(--tx2)">nenhum pedido</td></tr>';
+    ||'<tr><td colspan="7" style="color:var(--tx2);padding:30px">🎉 Nada pendente — caixa limpa</td></tr>';
+}
+
+async function loadKanban(){
+  const d=await api('/api/kanban');
+  orders=d.orders;
+  $('#kanban').innerHTML=STAGES.map(([key,label])=>{
+    const cards=orders.filter(o=>o.stage===key);
+    return `<div class="col col-${key}"><h3>${label}<span>${cards.length}</span></h3><div class="cards">
+      ${cards.map(o=>`<div class="card" data-id="${o.id}">
+        <div class="cli">${esc(o.cliente_nome||'?')}</div>
+        <div class="meta"><span>#${o.id} · ${o.n_itens} itens</span><b style="color:var(--tx)">${money(o.total_estimado)}</b></div>
+        <div class="foot">
+          <span class="st st-${o.status}">${ST_LABEL[o.status]}</span>
+          ${o.nf_numero?`<span>NF ${esc(o.nf_numero)}</span>`:''}
+          ${o.boleto_vencimento&&!o.pago_em?`<span>venc. ${dshort(o.boleto_vencimento)}</span>`:''}
+          ${o.pago_em?`<span style="color:var(--paid)">pago ${dshort(o.pago_em)}</span>`:''}
+          <span style="margin-left:auto">${dshort(o.created_at)}</span>
+        </div></div>`).join('')||'<div style="color:var(--tx2);font-size:12px;padding:8px">—</div>'}
+    </div></div>`;}).join('');
 }
 
 async function open(id){
@@ -127,9 +199,14 @@ function render(){
     <span class="st st-${o.status}">${ST_LABEL[o.status]}</span>
     <span class="conf">${o.confidence!=null?'confiança '+Math.round(o.confidence)+'%':''}</span>
     ${o.bling_pedido_numero?`<span class="conf">Bling nº ${esc(o.bling_pedido_numero)}</span>`:''}
-    <button class="chip" style="margin-left:auto" onclick="document.getElementById('main').classList.remove('open')">‹ lista</button>
+    <button class="chip" style="margin-left:auto" onclick="closeDetail()">‹ fechar</button>
   </div>
   ${exc.length?`<div class="sec"><h3>Exceções</h3>${exc.map(e=>`<div class="exc"><b>${esc(e.regra||'')}</b> — ${esc(e.detalhe||JSON.stringify(e))}</div>`).join('')}</div>`:''}
+  ${o.nf_id||o.pago_em?`<div class="sec"><h3>Faturamento</h3><div class="nf-info">
+    ${o.nf_numero?`NF <b>${esc(o.nf_numero)}</b> ${o.nf_situacao===6?'autorizada':'situação '+esc(o.nf_situacao)} ${o.nf_emissao?'· emitida '+dt(o.nf_emissao):''}<br>`:''}
+    ${o.boleto_vencimento?`Boleto venc. ${dshort(o.boleto_vencimento)} `:''}
+    ${o.pago_em?`<b style="color:var(--paid)">· PAGO em ${dt(o.pago_em)}</b>`:o.nf_id?'· aguardando pagamento':''}
+  </div></div>`:''}
   <div class="sec"><h3>Cliente</h3><div class="grid2">
     <div><label>Nome (como veio)</label><input value="${esc(o.cliente_nome)}" disabled></div>
     <div><label>CNPJ</label><input id="f-cnpj" value="${esc(o.cliente_cnpj)}" ${editable?'':'disabled'}></div>
@@ -161,6 +238,9 @@ function render(){
   </div>`;
 }
 
+window.closeDetail=()=>{current=null;$('#detail').innerHTML='<div class="empty">Selecione um pedido</div>';
+  $('#main').classList.remove('open');};
+
 function collect(){
   return {
     cliente_cnpj:$('#f-cnpj')?.value||null,
@@ -191,12 +271,12 @@ window.send=async()=>{try{current=await api(`/api/orders/${current.id}/send`,{me
   catch(e){toast(e.message,true);current=await api('/api/orders/'+current.id);render();load();}};
 window.discard=async()=>{if(!confirm('Descartar este pedido?'))return;
   try{await api(`/api/orders/${current.id}/discard`,{method:'POST',body:'{}'});
-  toast('Descartado');current=null;$('#detail').innerHTML='<div class="empty">Selecione um pedido</div>';
-  $('#main').classList.remove('open');load();}catch(e){toast(e.message,true)}};
+  toast('Descartado');closeDetail();load();}catch(e){toast(e.message,true)}};
 
 $('#chips').addEventListener('click',e=>{const b=e.target.closest('.chip');if(!b)return;
   filter=b.dataset.f||null;load();});
-$('#rows').addEventListener('click',e=>{const tr=e.target.closest('tr[data-id]');if(tr)open(tr.dataset.id);});
+$('#left').addEventListener('click',e=>{
+  const el=e.target.closest('[data-id]');if(el)open(el.dataset.id);});
 
 load(); setInterval(load, 30000);
 </script>
