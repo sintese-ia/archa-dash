@@ -218,7 +218,12 @@ function render(){
       ${o.status==='enviado'&&!o.despachado_em?`<button class="chip" onclick="despacho()">🚚 Confirmar transporte</button>`:''}
     </div>
   </div></div>`:''}
-  <div class="sec"><h3>Cliente</h3><div class="grid2">
+  <div class="sec"><h3>Cliente</h3>
+  ${editable&&!o.bling_contato_id?`<div class="exc" style="display:flex;align-items:center;gap:10px">
+    <span>Cliente não vinculado ao Bling</span>
+    <button class="chip" style="margin-left:auto" onclick="cadastrarCliente()">➕ Buscar/cadastrar pelo CNPJ</button>
+  </div>`:''}
+  <div class="grid2">
     <div><label>Nome (como veio)</label><input value="${esc(o.cliente_nome)}" disabled></div>
     <div><label>CNPJ</label><input id="f-cnpj" value="${esc(o.cliente_cnpj)}" ${editable?'':'disabled'}></div>
     <div><label>ID contato Bling</label><input id="f-contato" value="${esc(o.bling_contato_id)}" ${editable?'':'disabled'}></div>
@@ -288,6 +293,12 @@ window.requestConfirmation=async()=>{try{
 window.clientConfirmed=async()=>{try{
   current=await api(`/api/orders/${current.id}/client-confirmed`,{method:'POST'});
   toast('Confirmado pelo cliente — pronto pra aprovar');render();load();
+}catch(e){toast(e.message,true)}};
+
+window.cadastrarCliente=async()=>{try{
+  await api('/api/orders/'+current.id,{method:'PATCH',body:JSON.stringify(collect())});
+  current=await api(`/api/orders/${current.id}/cadastrar-cliente`,{method:'POST',body:JSON.stringify({cnpj:$('#f-cnpj')?.value||null})});
+  toast('Cliente vinculado — Bling id '+current.bling_contato_id);render();load();
 }catch(e){toast(e.message,true)}};
 
 window.gerarNF=async()=>{try{current=await api(`/api/orders/${current.id}/gerar-nf`,{method:'POST'});

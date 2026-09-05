@@ -162,6 +162,58 @@ app.post('/api/orders/:id/send', async (req, res, next) => {
   } catch (e) { next(e); }
 });
 
+// Cliente não encontrado → cadastra no Bling. Regras: (1) SEMPRE busca por CNPJ antes —
+// se já existe, só vincula (a proibição de criar contato era contra DUPLICADOS, não contra
+// cadastro legítimo); (2) dados vêm da Receita via BrasilAPI pra ninguém digitar.
+// Escopo de escrita de contatos validado 05/09 (POST /contatos = 201).
+app.post('/api/orders/:id/cadastrar-cliente', async (req, res, next) => {
+  try {
+    const order = await getOrder(req.params.id);
+    if (!order) return res.status(404).json({ error: 'não existe' });
+    if (order.bling_contato_id) return res.status(409).json({ error: 'pedido já tem contato vinculado' });
+    const cnpj = String(req.body?.cnpj || order.cliente_cnpj || '').replace(/\D/g, '');
+    if (cnpj.length !== 14) return res.status(400).json({ error: 'CNPJ inválido — preencha o campo CNPJ antes' });
+
+    // 1) já existe no Bling? só vincula
+    const busca = await blingGet(`/contatos?numeroDocumento=${cnpj}`);
+    let contato = (busca.body?.data || []).find((x) => (x.numeroDocumento || '').replace(/\D/g, '') === cnpj);
+    let criado = false;
+
+    if (!contato) {
+      // 2) consulta Receita (BrasilAPI) e cria
+      const rf = await fetch(`https://brasilapi.com.br/api/cnpj/v1/${cnpj}`);
+      const dados = rf.ok ? await rf.json() : null;
+      const payload = {
+        nome: dados?.razao_social || order.cliente_nome || `CNPJ ${cnpj}`,
+        fantasia: dados?.nome_fantasia || undefined,
+        tipo: 'J',
+        numeroDocumento: cnpj,
+        situacao: 'A',
+        indicadorIe: 9, // não contribuinte por padrão — ajustar no Bling se tiver IE
+        telefone: dados?.ddd_telefone_1 || undefined,
+        endereco: dados?.cep ? { geral: {
+          endereco: [dados.descricao_tipo_de_logradouro, dados.logradouro].filter(Boolean).join(' '),
+          numero: dados.numero || 'S/N', complemento: dados.complemento || undefined,
+          bairro: dados.bairro || undefined, cep: String(dados.cep).replace(/\D/g, ''),
+          municipio: dados.municipio || undefined, uf: dados.uf || undefined,
+        } } : undefined,
+      };
+      const { status, body } = await blingPost('/contatos', payload);
+      if (status >= 300 || !body?.data?.id) return res.status(502).json({ error: `Bling respondeu ${status}`, resposta: body });
+      contato = { id: body.data.id, nome: payload.nome, numeroDocumento: cnpj };
+      criado = true;
+    }
+
+    const excecoes = (order.exceptions || []).filter((e) => e.regra !== 'cliente');
+    await pool.query(
+      `UPDATE archa.orders SET bling_contato_id=$2, cliente_cnpj=$3, exceptions=$4, updated_at=now() WHERE id=$1`,
+      [order.id, contato.id, cnpj, JSON.stringify(excecoes)]);
+    await logEvent(order.id, 'gabriel', criado ? 'cliente_cadastrado' : 'cliente_vinculado',
+      { bling_contato_id: contato.id, nome: contato.nome, cnpj, fonte: criado ? 'BrasilAPI + POST /contatos' : 'match por CNPJ' });
+    res.json(await getOrder(order.id));
+  } catch (e) { next(e); }
+});
+
 // Gera a NF-e em rascunho a partir do pedido de venda (validado 05/09: POST gerar-nfe = 201)
 app.post('/api/orders/:id/gerar-nf', async (req, res, next) => {
   try {
