@@ -162,6 +162,50 @@ app.post('/api/orders/:id/send', async (req, res, next) => {
   } catch (e) { next(e); }
 });
 
+// Frame de confirmação (versão manual do MVP): pediu confirmação → aguardando_cliente
+app.post('/api/orders/:id/request-confirmation', async (req, res, next) => {
+  try {
+    const order = await getOrder(req.params.id);
+    if (!order) return res.status(404).json({ error: 'não existe' });
+    if (!EDITAVEL.includes(order.status)) return res.status(409).json({ error: `status ${order.status} não permite pedir confirmação` });
+    await pool.query(`UPDATE archa.orders SET status = 'aguardando_cliente', updated_at = now() WHERE id = $1`, [order.id]);
+    await logEvent(order.id, 'gabriel', 'confirmacao_solicitada', { para: order.source_from || null });
+    res.json(await getOrder(order.id));
+  } catch (e) { next(e); }
+});
+
+// Cliente confirmou o frame → volta pronto (com aprendizado origem confirmado_cliente)
+app.post('/api/orders/:id/client-confirmed', async (req, res, next) => {
+  try {
+    const order = await getOrder(req.params.id);
+    if (!order) return res.status(404).json({ error: 'não existe' });
+    if (order.status !== 'aguardando_cliente') return res.status(409).json({ error: `status ${order.status} não aguarda cliente` });
+    await pool.query(`UPDATE archa.orders SET status = 'pronto', confidence = 100, updated_at = now() WHERE id = $1`, [order.id]);
+    await logEvent(order.id, 'gabriel', 'confirmado_cliente', { excecoes_resolvidas: order.exceptions || [] });
+    const cnpj = (order.cliente_cnpj || '').replace(/\D/g, '');
+    if (cnpj) {
+      for (const it of order.items) {
+        if (it.raw_desc && it.sku) {
+          await pool.query(
+            `INSERT INTO archa.sku_map (cliente_chave, alias, sku, bling_produto_id, origem)
+             VALUES ($1, lower(trim($2)), $3, $4, 'confirmado_cliente')
+             ON CONFLICT (cliente_chave, alias) DO UPDATE SET sku = EXCLUDED.sku,
+               bling_produto_id = EXCLUDED.bling_produto_id`,
+            [cnpj, it.raw_desc, it.sku, it.bling_produto_id]);
+        }
+        if (it.sku && it.preco_unit != null) {
+          await pool.query(
+            `INSERT INTO archa.price_table (cliente_chave, sku, preco, origem)
+             VALUES ($1, $2, $3, 'confirmado_cliente')
+             ON CONFLICT (cliente_chave, sku) DO UPDATE SET preco = EXCLUDED.preco, updated_at = now()`,
+            [cnpj, it.sku, it.preco_unit]);
+        }
+      }
+    }
+    res.json(await getOrder(order.id));
+  } catch (e) { next(e); }
+});
+
 // Transporte confirmado (manual — fallback quando a etiqueta é gerada fora do Bling)
 app.post('/api/orders/:id/despacho', async (req, res, next) => {
   try {
@@ -193,8 +237,8 @@ function stageOf(o) {
   if (o.despachado_em) return 'transporte';
   if (o.nf_id) return 'nf';
   if (['aprovado', 'enviado', 'erro'].includes(o.status)) return 'erp';
-  if (['pronto', 'excecao'].includes(o.status)) return 'confirmacao';
-  return 'entrada';
+  if (o.status === 'aguardando_cliente') return 'confirmacao';
+  return 'entrada'; // extraido | pronto | excecao — chegou e está em tratamento
 }
 app.get('/api/kanban', async (_req, res, next) => {
   try {

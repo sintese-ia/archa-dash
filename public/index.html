@@ -40,6 +40,7 @@
   .st-aprovado{background:rgba(52,211,153,.20);color:var(--ok)}
   .st-enviado{background:rgba(167,139,250,.14);color:var(--sent)}
   .st-erro,.st-descartado{background:rgba(248,113,113,.12);color:var(--err)}
+  .st-aguardando_cliente{background:rgba(251,146,60,.14);color:#fb923c}
   /* kanban */
   #kanban{display:none;padding:16px;gap:12px;align-items:flex-start;min-height:100%}
   main.kb #kanban{display:flex} main.kb #list{display:none}
@@ -115,9 +116,9 @@
 </main>
 <div id="toast"></div>
 <script>
-const ST_LABEL={extraido:'extraído',pronto:'pronto',excecao:'exceção',aprovado:'aprovado',enviado:'enviado',erro:'erro',descartado:'descartado'};
-const ORDER_ST=['pronto','excecao','extraido','aprovado','erro','enviado'];
-const PEND_ST=['extraido','pronto','excecao','erro'];  // exige ação humana
+const ST_LABEL={extraido:'extraído',pronto:'pronto',excecao:'exceção',aguardando_cliente:'aguard. cliente',aprovado:'aprovado',enviado:'enviado',erro:'erro',descartado:'descartado'};
+const ORDER_ST=['pronto','excecao','extraido','aguardando_cliente','aprovado','erro','enviado'];
+const PEND_ST=['extraido','pronto','excecao','erro'];  // exige ação humana (aguardando_cliente = bola com o cliente)
 const STAGES=[['entrada','Entrada'],['confirmacao','Aguardando confirmação'],['erp','Aprovado → ERP'],['nf','NF gerada'],['transporte','Transporte confirmado'],['pago','Pagamento realizado']];
 let view='pend', filter=null, current=null, orders=[];
 
@@ -242,7 +243,10 @@ function render(){
   <div class="btns">
     ${editable?`<button class="act b-save" onclick="save()">Salvar</button>
     <button class="act b-approve" onclick="approve(false)">Aprovar</button>
-    <button class="act b-approve" onclick="approve(true)">Aprovar e enviar ➜ Bling</button>`:''}
+    <button class="act b-approve" onclick="approve(true)">Aprovar e enviar ➜ Bling</button>
+    <button class="act b-save" onclick="requestConfirmation()">✉️ Pedir confirmação</button>`:''}
+    ${o.status==='aguardando_cliente'?`<button class="act b-approve" onclick="clientConfirmed()">✅ Cliente confirmou</button>
+    <button class="act b-save" onclick="frameEmail()">✉️ Reenviar e-mail</button>`:''}
     ${['aprovado','erro'].includes(o.status)?`<button class="act b-send" onclick="send()">Enviar ➜ Bling</button>`:''}
     ${o.status!=='enviado'&&o.status!=='descartado'?`<button class="act b-discard" onclick="discard()">Descartar</button>`:''}
   </div>`;
@@ -250,6 +254,39 @@ function render(){
 
 window.closeDetail=()=>{current=null;$('#detail').innerHTML='<div class="empty">Selecione um pedido</div>';
   $('#main').classList.remove('open');};
+
+// Frame de confirmação: e-mail com o pedido interpretado, pro cliente responder CONFIRMO
+window.frameEmail=()=>{
+  const o=current;
+  const to=o.source_from||'';
+  const su=encodeURIComponent(`Confirma seu pedido? ${o.po_number?('('+o.po_number+')'):''}`);
+  const linhas=o.items.map(it=>`  • ${it.descricao||it.raw_desc} — ${Number(it.quantidade)} un × ${Number(it.preco_unit||0).toLocaleString('pt-BR',{style:'currency',currency:'BRL'})}`).join('\n');
+  const body=encodeURIComponent(
+`Olá!
+
+Recebemos seu pedido e entendemos assim:
+
+${linhas}
+
+Total: ${Number(o.total_estimado||0).toLocaleString('pt-BR',{style:'currency',currency:'BRL'})}
+Pagamento: ${o.pagamento_condicao||'a combinar'}
+
+Está correto? Responda este e-mail com CONFIRMO e seguimos com o faturamento.
+Se algo estiver diferente, responda apontando o ajuste.
+
+Cells`);
+  window.open(`https://mail.google.com/mail/?view=cm&fs=1&to=${to}&su=${su}&body=${body}`,'_blank');
+};
+window.requestConfirmation=async()=>{try{
+  await api('/api/orders/'+current.id,{method:'PATCH',body:JSON.stringify(collect())});
+  current=await api(`/api/orders/${current.id}/request-confirmation`,{method:'POST'});
+  frameEmail();
+  toast('Aguardando confirmação do cliente');render();load();
+}catch(e){toast(e.message,true)}};
+window.clientConfirmed=async()=>{try{
+  current=await api(`/api/orders/${current.id}/client-confirmed`,{method:'POST'});
+  toast('Confirmado pelo cliente — pronto pra aprovar');render();load();
+}catch(e){toast(e.message,true)}};
 
 window.despacho=async()=>{const r=prompt('Código de rastreio (opcional):')||null;
   try{current=await api(`/api/orders/${current.id}/despacho`,{method:'POST',body:JSON.stringify({rastreio:r})});
